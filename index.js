@@ -12,7 +12,7 @@ const app = express();
 // CORS
 app.use(
   cors({
-    origin: "client-managment-system-frontend-kt.vercel.app",
+    origin: "https://client-managment-system-frontend-kt.vercel.app",
   })
 );
 

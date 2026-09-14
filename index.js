@@ -8,30 +8,39 @@ import customerRoutes from "./Route/Customer.route.js";
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 5000;
 
 // CORS
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin: "https://client-managment-system-frontend.vercel.app",
   })
 );
 
-// JSON Middleware
+// JSON
 app.use(express.json());
 
-// MongoDB Connection
-connectDB();
-
 // Test Route
-app.get("/", (req, res) => {
-  res.send("Client Management System API is running!");
+app.get("/", async (req, res) => {
+  res.json({
+    success: true,
+    message: "Client Management System API is running!",
+  });
 });
 
 // Customer Routes
-app.use("/api/customers", customerRoutes);
+app.use("/api/customers", async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Database connection failed",
+    });
+  }
+}, customerRoutes);
+
+// Vercel
+export default app;
 
 // Start Server
-app.listen(port, () => {
-  console.log(`Server is running on http://localhost:${port}`);
-});

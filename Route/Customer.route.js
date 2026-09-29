@@ -6,27 +6,33 @@ import {
   getCustomerById,
   updateCustomer,
   deleteCustomer,
-  getCustomerSummary,
 } from "../Controller/Customer.Controller.js";
 
 const router = express.Router();
 
-// Create Customer
+// ======================================================
+// CREATE CUSTOMER
+// ======================================================
 router.post("/", createCustomer);
 
-// Get All Customers + Search + Filter
+// ======================================================
+// GET ALL CUSTOMERS + SEARCH
+// ======================================================
 router.get("/", getCustomers);
 
-// Get Customer Summary / Total Amount
-router.get("/summary", getCustomerSummary);
-
-// Get Single Customer
+// ======================================================
+// GET SINGLE CUSTOMER
+// ======================================================
 router.get("/:id", getCustomerById);
 
-// Update Customer
+// ======================================================
+// UPDATE CUSTOMER
+// ======================================================
 router.put("/:id", updateCustomer);
 
-// Delete Customer
+// ======================================================
+// DELETE CUSTOMER
+// ======================================================
 router.delete("/:id", deleteCustomer);
 
 export default router;

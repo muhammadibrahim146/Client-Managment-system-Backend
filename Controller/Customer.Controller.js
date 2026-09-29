@@ -1,6 +1,9 @@
-import Customer from "../model/Customer.model.js"
+import Customer from "../model/Customer.model.js";
 
+// ======================================================
 // CREATE CUSTOMER
+// ======================================================
+
 const createCustomer = async (req, res) => {
   try {
     const {
@@ -8,9 +11,6 @@ const createCustomer = async (req, res) => {
       address,
       email,
       phone,
-      month,
-      amount,
-      status,
     } = req.body;
 
     const customer = await Customer.create({
@@ -18,9 +18,6 @@ const createCustomer = async (req, res) => {
       address,
       email,
       phone,
-      month,
-      amount,
-      status,
     });
 
     res.status(201).json({
@@ -40,29 +37,22 @@ const createCustomer = async (req, res) => {
 };
 
 
-// GET ALL CUSTOMERS + SEARCH + FILTER
+// ======================================================
+// GET ALL CUSTOMERS + SEARCH
+// ======================================================
+
 const getCustomers = async (req, res) => {
   try {
-    const { search, month, status } = req.query;
+    const { search } = req.query;
 
     const filter = {};
 
-    // Search by name
+    // Search customer by name
     if (search) {
       filter.name = {
         $regex: search,
         $options: "i",
       };
-    }
-
-    // Month filter
-    if (month) {
-      filter.month = month;
-    }
-
-    // Status filter
-    if (status) {
-      filter.status = status;
     }
 
     const customers = await Customer.find(filter)
@@ -86,7 +76,10 @@ const getCustomers = async (req, res) => {
 };
 
 
+// ======================================================
 // GET SINGLE CUSTOMER
+// ======================================================
+
 const getCustomerById = async (req, res) => {
   try {
     const customer = await Customer.findById(req.params.id);
@@ -98,8 +91,14 @@ const getCustomerById = async (req, res) => {
       });
     }
 
-    res.status(200).json(customer);
+    res.status(200).json({
+      success: true,
+      customer,
+    });
+
   } catch (error) {
+    console.error("Get Customer Error:", error);
+
     res.status(500).json({
       success: false,
       message: "Failed to get customer",
@@ -109,12 +108,27 @@ const getCustomerById = async (req, res) => {
 };
 
 
+// ======================================================
 // UPDATE CUSTOMER
+// ======================================================
+
 const updateCustomer = async (req, res) => {
   try {
+    const {
+      name,
+      address,
+      email,
+      phone,
+    } = req.body;
+
     const customer = await Customer.findByIdAndUpdate(
       req.params.id,
-      req.body,
+      {
+        name,
+        address,
+        email,
+        phone,
+      },
       {
         new: true,
         runValidators: true,
@@ -133,6 +147,7 @@ const updateCustomer = async (req, res) => {
       message: "Customer updated successfully",
       customer,
     });
+
   } catch (error) {
     console.error("Update Customer Error:", error);
 
@@ -145,7 +160,10 @@ const updateCustomer = async (req, res) => {
 };
 
 
+// ======================================================
 // DELETE CUSTOMER
+// ======================================================
+
 const deleteCustomer = async (req, res) => {
   try {
     const customer = await Customer.findByIdAndDelete(
@@ -163,6 +181,7 @@ const deleteCustomer = async (req, res) => {
       success: true,
       message: "Customer deleted successfully",
     });
+
   } catch (error) {
     console.error("Delete Customer Error:", error);
 
@@ -174,104 +193,15 @@ const deleteCustomer = async (req, res) => {
   }
 };
 
-// GET CUSTOMER SUMMARY
-const getCustomerSummary = async (req, res) => {
-  try {
-    const { month, status } = req.query;
 
-    const match = {};
+// ======================================================
+// EXPORTS
+// ======================================================
 
-    // Month filter
-    if (month) {
-      match.month = month;
-    }
-
-    // Status filter
-    if (status) {
-      match.status = status;
-    }
-
-    const result = await Customer.aggregate([
-      {
-        $match: match,
-      },
-      {
-        $group: {
-          _id: null,
-
-          totalCustomers: {
-            $sum: 1,
-          },
-
-          totalAmount: {
-            $sum: "$amount",
-          },
-
-          paidAmount: {
-            $sum: {
-              $cond: [
-                { $eq: ["$status", "Paid"] },
-                "$amount",
-                0,
-              ],
-            },
-          },
-
-          unpaidAmount: {
-            $sum: {
-              $cond: [
-                { $eq: ["$status", "Unpaid"] },
-                "$amount",
-                0,
-              ],
-            },
-          },
-
-          paidCustomers: {
-            $sum: {
-              $cond: [
-                { $eq: ["$status", "Paid"] },
-                1,
-                0,
-              ],
-            },
-          },
-
-          unpaidCustomers: {
-            $sum: {
-              $cond: [
-                { $eq: ["$status", "Unpaid"] },
-                1,
-                0,
-              ],
-            },
-          },
-        },
-      },
-    ]);
-
-    const summary = result[0] || {
-      totalCustomers: 0,
-      totalAmount: 0,
-      paidAmount: 0,
-      unpaidAmount: 0,
-      paidCustomers: 0,
-      unpaidCustomers: 0,
-    };
-
-    res.status(200).json({
-      success: true,
-      summary,
-    });
-
-  } catch (error) {
-    console.error("Summary Error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to calculate summary",
-      error: error.message,
-    });
-  }
+export {
+  createCustomer,
+  getCustomers,
+  getCustomerById,
+  updateCustomer,
+  deleteCustomer,
 };
-export { createCustomer, getCustomers, getCustomerById, updateCustomer, deleteCustomer, getCustomerSummary, };

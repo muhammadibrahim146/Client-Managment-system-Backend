@@ -22,40 +22,7 @@ const customerSchema = new mongoose.Schema(
 
     phone: {
       type: String,
-      required: true,
       trim: true,
-    },
-
-    month: {
-      type: String,
-      required: true,
-      enum: [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-      ],
-    },
-
-    amount: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-
-    status: {
-      type: String,
-      required: true,
-      enum: ["Paid", "Unpaid"],
-      default: "Unpaid",
     },
   },
   {

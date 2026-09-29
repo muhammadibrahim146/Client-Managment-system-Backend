@@ -4,6 +4,7 @@ import cors from "cors";
 
 import connectDB from "./Config/db.js";
 import customerRoutes from "./Route/Customer.route.js";
+import billingRoutes from "./Route/Billing.route.js";
 
 dotenv.config();
 
@@ -12,7 +13,10 @@ const app = express();
 // CORS
 app.use(
   cors({
-    origin: "https://client-managment-system-frontend-my.vercel.app",
+    origin: [
+      "https://client-managment-system-frontend-my.vercel.app",
+      
+    ],
   })
 );
 
@@ -28,17 +32,38 @@ app.get("/", async (req, res) => {
 });
 
 // Customer Routes
-app.use("/api/customers", async (req, res, next) => {
-  try {
-    await connectDB();
-    next();
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Database connection failed",
-    });
-  }
-}, customerRoutes);
+app.use(
+  "/api/customers",
+  async (req, res, next) => {
+    try {
+      await connectDB();
+      next();
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Database connection failed",
+      });
+    }
+  },
+  customerRoutes
+);
+
+// Billing Routes
+app.use(
+  "/api/billing",
+  async (req, res, next) => {
+    try {
+      await connectDB();
+      next();
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Database connection failed",
+      });
+    }
+  },
+  billingRoutes
+);
 
 // Vercel
 export default app;

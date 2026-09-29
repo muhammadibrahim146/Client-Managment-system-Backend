@@ -1,6 +1,49 @@
 import BillingRecord from "../model/BillingRecord.model.js";
 import Customer from "../model/Customer.model.js";
 
+// ======================================================
+// ENSURE MONTHLY BILLING RECORDS
+// Fast bulk creation
+// ======================================================
+
+const ensureMonthlyBillingRecords = async (month, year) => {
+  // Get only customer IDs
+  const customers = await Customer.find({})
+    .select("_id")
+    .lean();
+
+  if (!customers.length) {
+    return;
+  }
+
+  // Prepare bulk operations
+  const operations = customers.map((customer) => ({
+    updateOne: {
+      filter: {
+        customerId: customer._id,
+        month,
+        year,
+      },
+
+      update: {
+        $setOnInsert: {
+          customerId: customer._id,
+          month,
+          year,
+          amount: 0,
+          status: "Unpaid",
+        },
+      },
+
+      upsert: true,
+    },
+  }));
+
+  // Create missing records in bulk
+  await BillingRecord.bulkWrite(operations, {
+    ordered: false,
+  });
+};
 
 // ======================================================
 // GET MONTHLY BILLING RECORDS
@@ -24,50 +67,26 @@ const getBillingRecords = async (req, res) => {
 
     const numericYear = Number(year);
 
-    // --------------------------------------------------
-    // Get all customers
-    // --------------------------------------------------
-
-    const customerFilter = {};
-
-    if (search) {
-      customerFilter.name = {
-        $regex: search,
-        $options: "i",
-      };
-    }
-
-    const customers = await Customer.find(
-      customerFilter
-    ).sort({
-      createdAt: -1,
-    });
-
-    // --------------------------------------------------
-    // Create missing billing records automatically
-    // --------------------------------------------------
-
-    for (const customer of customers) {
-      const existingRecord =
-        await BillingRecord.findOne({
-          customerId: customer._id,
-          month,
-          year: numericYear,
-        });
-
-      if (!existingRecord) {
-        await BillingRecord.create({
-          customerId: customer._id,
-          month,
-          year: numericYear,
-          amount: 0,
-          status: "Unpaid",
-        });
-      }
+    if (Number.isNaN(numericYear)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid year",
+      });
     }
 
     // --------------------------------------------------
-    // Get billing records
+    // STEP 1:
+    // Make sure every customer has a record for this month
+    // --------------------------------------------------
+
+    await ensureMonthlyBillingRecords(
+      month,
+      numericYear
+    );
+
+    // --------------------------------------------------
+    // STEP 2:
+    // Build billing filter
     // --------------------------------------------------
 
     const billingFilter = {
@@ -76,10 +95,22 @@ const getBillingRecords = async (req, res) => {
     };
 
     if (status) {
+      if (!["Paid", "Unpaid"].includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid status",
+        });
+      }
+
       billingFilter.status = status;
     }
 
-    const billingRecords =
+    // --------------------------------------------------
+    // STEP 3:
+    // Get billing records
+    // --------------------------------------------------
+
+    let billingRecords =
       await BillingRecord.find(billingFilter)
         .populate(
           "customerId",
@@ -87,35 +118,47 @@ const getBillingRecords = async (req, res) => {
         )
         .sort({
           createdAt: -1,
-        });
+        })
+        .lean();
 
     // --------------------------------------------------
-    // Search again after populate
+    // STEP 4:
+    // Search customer
     // --------------------------------------------------
-
-    let filteredRecords = billingRecords;
 
     if (search) {
-      const searchText = search.toLowerCase();
+      const searchText =
+        search.trim().toLowerCase();
 
-      filteredRecords = billingRecords.filter(
-        (record) =>
-          record.customerId &&
-          (
+      billingRecords =
+        billingRecords.filter((record) => {
+          if (!record.customerId) {
+            return false;
+          }
+
+          const name =
             record.customerId.name
-              ?.toLowerCase()
-              .includes(searchText) ||
+              ?.toLowerCase() || "";
+
+          const phone =
             record.customerId.phone
-              ?.toLowerCase()
-              .includes(searchText)
-          )
-      );
+              ?.toLowerCase() || "";
+
+          return (
+            name.includes(searchText) ||
+            phone.includes(searchText)
+          );
+        });
     }
 
-    res.status(200).json({
+    // --------------------------------------------------
+    // RESPONSE
+    // --------------------------------------------------
+
+    return res.status(200).json({
       success: true,
-      count: filteredRecords.length,
-      billingRecords: filteredRecords,
+      count: billingRecords.length,
+      billingRecords,
     });
 
   } catch (error) {
@@ -124,14 +167,13 @@ const getBillingRecords = async (req, res) => {
       error
     );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Failed to get billing records",
       error: error.message,
     });
   }
 };
-
 
 // ======================================================
 // UPDATE BILLING RECORD
@@ -140,11 +182,17 @@ const getBillingRecords = async (req, res) => {
 
 const updateBillingRecord = async (req, res) => {
   try {
-    const { amount, status } = req.body;
+    const {
+      amount,
+      status,
+    } = req.body;
 
     const updateData = {};
 
-    // Amount update
+    // --------------------------------------------------
+    // Amount
+    // --------------------------------------------------
+
     if (amount !== undefined) {
       const numericAmount = Number(amount);
 
@@ -161,7 +209,10 @@ const updateBillingRecord = async (req, res) => {
       updateData.amount = numericAmount;
     }
 
-    // Status update
+    // --------------------------------------------------
+    // Status
+    // --------------------------------------------------
+
     if (status !== undefined) {
       if (
         !["Paid", "Unpaid"].includes(status)
@@ -175,6 +226,10 @@ const updateBillingRecord = async (req, res) => {
 
       updateData.status = status;
     }
+
+    // --------------------------------------------------
+    // Update
+    // --------------------------------------------------
 
     const billingRecord =
       await BillingRecord.findByIdAndUpdate(
@@ -196,7 +251,7 @@ const updateBillingRecord = async (req, res) => {
       });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message:
         "Billing record updated successfully",
@@ -209,14 +264,14 @@ const updateBillingRecord = async (req, res) => {
       error
     );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Failed to update billing record",
+      message:
+        "Failed to update billing record",
       error: error.message,
     });
   }
 };
-
 
 // ======================================================
 // CREATE BILLING RECORD MANUALLY
@@ -244,7 +299,10 @@ const createBillingRecord = async (req, res) => {
       });
     }
 
+    // --------------------------------------------------
     // Check customer
+    // --------------------------------------------------
+
     const customer =
       await Customer.findById(customerId);
 
@@ -255,7 +313,10 @@ const createBillingRecord = async (req, res) => {
       });
     }
 
+    // --------------------------------------------------
     // Check duplicate
+    // --------------------------------------------------
+
     const existingRecord =
       await BillingRecord.findOne({
         customerId,
@@ -272,13 +333,21 @@ const createBillingRecord = async (req, res) => {
       });
     }
 
+    // --------------------------------------------------
+    // Create
+    // --------------------------------------------------
+
     const billingRecord =
       await BillingRecord.create({
         customerId,
         month,
         year,
-        amount: amount || 0,
-        status: status || "Unpaid",
+        amount:
+          amount !== undefined
+            ? Number(amount)
+            : 0,
+        status:
+          status || "Unpaid",
       });
 
     const populatedRecord =
@@ -287,7 +356,7 @@ const createBillingRecord = async (req, res) => {
         "name phone email address"
       );
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message:
         "Billing record created successfully",
@@ -300,7 +369,7 @@ const createBillingRecord = async (req, res) => {
       error
     );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message:
         "Failed to create billing record",
@@ -309,14 +378,16 @@ const createBillingRecord = async (req, res) => {
   }
 };
 
-
 // ======================================================
 // MONTHLY SUMMARY
 // ======================================================
 
 const getBillingSummary = async (req, res) => {
   try {
-    const { month, year } = req.query;
+    const {
+      month,
+      year,
+    } = req.query;
 
     if (!month || !year) {
       return res.status(400).json({
@@ -327,6 +398,26 @@ const getBillingSummary = async (req, res) => {
     }
 
     const numericYear = Number(year);
+
+    if (Number.isNaN(numericYear)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid year",
+      });
+    }
+
+    // --------------------------------------------------
+    // Make sure monthly records exist
+    // --------------------------------------------------
+
+    await ensureMonthlyBillingRecords(
+      month,
+      numericYear
+    );
+
+    // --------------------------------------------------
+    // Calculate summary
+    // --------------------------------------------------
 
     const result =
       await BillingRecord.aggregate([
@@ -422,7 +513,7 @@ const getBillingSummary = async (req, res) => {
         unpaidCustomers: 0,
       };
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       summary,
     });
@@ -433,7 +524,7 @@ const getBillingSummary = async (req, res) => {
       error
     );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message:
         "Failed to calculate billing summary",
@@ -442,6 +533,9 @@ const getBillingSummary = async (req, res) => {
   }
 };
 
+// ======================================================
+// EXPORTS
+// ======================================================
 
 export {
   getBillingRecords,

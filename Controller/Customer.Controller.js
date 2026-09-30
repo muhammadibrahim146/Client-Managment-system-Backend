@@ -1,5 +1,6 @@
 import Customer from "../model/Customer.model.js";
-
+//import Customer from "../model/Customer.model.js";
+import BillingRecord from "../model/BillingRecord.model.js";
 // ======================================================
 // CREATE CUSTOMER
 // ======================================================
@@ -164,11 +165,13 @@ const updateCustomer = async (req, res) => {
 // DELETE CUSTOMER
 // ======================================================
 
+// DELETE CUSTOMER
 const deleteCustomer = async (req, res) => {
   try {
-    const customer = await Customer.findByIdAndDelete(
-      req.params.id
-    );
+    const customerId = req.params.id;
+
+    // First check customer exists
+    const customer = await Customer.findById(customerId);
 
     if (!customer) {
       return res.status(404).json({
@@ -177,11 +180,19 @@ const deleteCustomer = async (req, res) => {
       });
     }
 
-    res.status(200).json({
-      success: true,
-      message: "Customer deleted successfully",
+    // Delete customer
+    await Customer.findByIdAndDelete(customerId);
+
+    // Delete ALL monthly billing records of this customer
+    const billingDeleteResult = await BillingRecord.deleteMany({
+      customerId: customerId,
     });
 
+    res.status(200).json({
+      success: true,
+      message: "Customer and all billing records deleted successfully",
+      deletedBillingRecords: billingDeleteResult.deletedCount,
+    });
   } catch (error) {
     console.error("Delete Customer Error:", error);
 

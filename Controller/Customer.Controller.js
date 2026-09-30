@@ -19,6 +19,8 @@ const createCustomer = async (req, res) => {
       address,
       email,
       phone,
+      
+      
     });
 
     res.status(201).json({

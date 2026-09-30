@@ -123,6 +123,19 @@ const getBillingRecords = async (req, res) => {
 
     // --------------------------------------------------
     // STEP 4:
+    // Remove orphan billing records
+    // --------------------------------------------------
+
+    // Agar customer delete ho chuka hai lekin
+    // billing record database mein reh gaya ho,
+    // us record ko frontend par show nahi karna.
+
+    billingRecords = billingRecords.filter(
+      (record) => record.customerId
+    );
+
+    // --------------------------------------------------
+    // STEP 5:
     // Search customer
     // --------------------------------------------------
 
@@ -337,17 +350,41 @@ const createBillingRecord = async (req, res) => {
     // Create
     // --------------------------------------------------
 
+    const numericAmount =
+      amount !== undefined
+        ? Number(amount)
+        : 0;
+
+    if (
+      Number.isNaN(numericAmount) ||
+      numericAmount < 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid amount",
+      });
+    }
+
+    const finalStatus =
+      status || "Unpaid";
+
+    if (
+      !["Paid", "Unpaid"].includes(finalStatus)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Status must be Paid or Unpaid",
+      });
+    }
+
     const billingRecord =
       await BillingRecord.create({
         customerId,
         month,
-        year,
-        amount:
-          amount !== undefined
-            ? Number(amount)
-            : 0,
-        status:
-          status || "Unpaid",
+        year: Number(year),
+        amount: numericAmount,
+        status: finalStatus,
       });
 
     const populatedRecord =
@@ -428,6 +465,32 @@ const getBillingSummary = async (req, res) => {
           },
         },
 
+        // ------------------------------------------------
+        // IMPORTANT:
+        // Verify that customer still exists
+        // ------------------------------------------------
+
+        {
+          $lookup: {
+            from: "customers",
+            localField: "customerId",
+            foreignField: "_id",
+            as: "customer",
+          },
+        },
+
+        {
+          $match: {
+            "customer.0": {
+              $exists: true,
+            },
+          },
+        },
+
+        // ------------------------------------------------
+        // Calculate summary
+        // ------------------------------------------------
+
         {
           $group: {
             _id: null,
@@ -503,6 +566,10 @@ const getBillingSummary = async (req, res) => {
         },
       ]);
 
+    // --------------------------------------------------
+    // Default summary
+    // --------------------------------------------------
+
     const summary =
       result[0] || {
         totalCustomers: 0,
@@ -512,6 +579,10 @@ const getBillingSummary = async (req, res) => {
         paidCustomers: 0,
         unpaidCustomers: 0,
       };
+
+    // MongoDB aggregation _id frontend ko
+    // nahi chahiye
+    delete summary._id;
 
     return res.status(200).json({
       success: true,

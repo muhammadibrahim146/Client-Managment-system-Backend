@@ -44,17 +44,32 @@ const createCustomer = async (req, res) => {
 // GET ALL CUSTOMERS + SEARCH
 // ======================================================
 
+// ======================================================
+// GET ALL CUSTOMERS + SEARCH BY NAME OR ADDRESS
+// ======================================================
+
 const getCustomers = async (req, res) => {
   try {
     const { search } = req.query;
 
-    const filter = {};
+    let filter = {};
 
-    // Search customer by name
-    if (search) {
-      filter.name = {
-        $regex: search,
-        $options: "i",
+    if (search && search.trim()) {
+      filter = {
+        $or: [
+          {
+            name: {
+              $regex: search.trim(),
+              $options: "i",
+            },
+          },
+          {
+            address: {
+              $regex: search.trim(),
+              $options: "i",
+            },
+          },
+        ],
       };
     }
 

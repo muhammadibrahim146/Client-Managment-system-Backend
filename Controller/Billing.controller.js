@@ -1,13 +1,13 @@
+
 import BillingRecord from "../model/BillingRecord.model.js";
 import Customer from "../model/Customer.model.js";
 
 // ======================================================
 // ENSURE MONTHLY BILLING RECORDS
-// Fast bulk creation
 // ======================================================
 
 const ensureMonthlyBillingRecords = async (month, year) => {
-  // Get only customer IDs
+  // Get all customer IDs
   const customers = await Customer.find({})
     .select("_id")
     .lean();
@@ -16,7 +16,7 @@ const ensureMonthlyBillingRecords = async (month, year) => {
     return;
   }
 
-  // Prepare bulk operations
+  // Create missing monthly billing records
   const operations = customers.map((customer) => ({
     updateOne: {
       filter: {
@@ -24,7 +24,6 @@ const ensureMonthlyBillingRecords = async (month, year) => {
         month,
         year,
       },
-
       update: {
         $setOnInsert: {
           customerId: customer._id,
@@ -34,12 +33,10 @@ const ensureMonthlyBillingRecords = async (month, year) => {
           status: "Unpaid",
         },
       },
-
       upsert: true,
     },
   }));
 
-  // Create missing records in bulk
   await BillingRecord.bulkWrite(operations, {
     ordered: false,
   });
@@ -47,17 +44,14 @@ const ensureMonthlyBillingRecords = async (month, year) => {
 
 // ======================================================
 // GET MONTHLY BILLING RECORDS
+// Search: name, phone, email, address
 // ======================================================
 
 const getBillingRecords = async (req, res) => {
   try {
-    const {
-      month,
-      year,
-      search,
-      status,
-    } = req.query;
+    const { month, year, search, status } = req.query;
 
+    // Validate month and year
     if (!month || !year) {
       return res.status(400).json({
         success: false,
@@ -67,28 +61,17 @@ const getBillingRecords = async (req, res) => {
 
     const numericYear = Number(year);
 
-    if (Number.isNaN(numericYear)) {
+    if (!Number.isInteger(numericYear)) {
       return res.status(400).json({
         success: false,
         message: "Invalid year",
       });
     }
 
-    // --------------------------------------------------
-    // STEP 1:
-    // Make sure every customer has a record for this month
-    // --------------------------------------------------
+    // STEP 1: Ensure monthly records exist
+    await ensureMonthlyBillingRecords(month, numericYear);
 
-    await ensureMonthlyBillingRecords(
-      month,
-      numericYear
-    );
-
-    // --------------------------------------------------
-    // STEP 2:
-    // Build billing filter
-    // --------------------------------------------------
-
+    // STEP 2: Build billing filter
     const billingFilter = {
       month,
       year: numericYear,
@@ -105,80 +88,50 @@ const getBillingRecords = async (req, res) => {
       billingFilter.status = status;
     }
 
-    // --------------------------------------------------
-    // STEP 3:
-    // Get billing records
-    // --------------------------------------------------
+    // STEP 3: Fetch selected month's billing records
+    let billingRecords = await BillingRecord.find(billingFilter)
+      .populate("customerId", "name phone email address")
+      .sort({ createdAt: -1 })
+      .lean();
 
-    let billingRecords =
-      await BillingRecord.find(billingFilter)
-        .populate(
-          "customerId",
-          "name phone email address"
-        )
-        .sort({
-          createdAt: -1,
-        })
-        .lean();
-
-    // --------------------------------------------------
-    // STEP 4:
-    // Remove orphan billing records
-    // --------------------------------------------------
-
-    // Agar customer delete ho chuka hai lekin
-    // billing record database mein reh gaya ho,
-    // us record ko frontend par show nahi karna.
-
+    // STEP 4: Remove records whose customer no longer exists
     billingRecords = billingRecords.filter(
       (record) => record.customerId
     );
 
-    // --------------------------------------------------
-    // STEP 5:
-    // Search customer
-    // --------------------------------------------------
+    // STEP 5: Search within selected month/year records
+    if (search && search.trim()) {
+      const searchText = search.trim().toLowerCase();
 
-    if (search) {
-      const searchText =
-        search.trim().toLowerCase();
+      billingRecords = billingRecords.filter((record) => {
+        const customer = record.customerId;
 
-      billingRecords =
-        billingRecords.filter((record) => {
-          if (!record.customerId) {
-            return false;
-          }
+        if (!customer) {
+          return false;
+        }
 
-          const name =
-            record.customerId.name
-              ?.toLowerCase() || "";
+        const name = customer.name?.toLowerCase() || "";
+        const phone = customer.phone?.toLowerCase() || "";
+        const email = customer.email?.toLowerCase() || "";
+        const address = customer.address?.toLowerCase() || "";
 
-          const phone =
-            record.customerId.phone
-              ?.toLowerCase() || "";
-
-          return (
-            name.includes(searchText) ||
-            phone.includes(searchText)
-          );
-        });
+        return (
+          name.includes(searchText) ||
+          phone.includes(searchText) ||
+          email.includes(searchText) ||
+          address.includes(searchText)
+        );
+      });
     }
 
-    // --------------------------------------------------
-    // RESPONSE
-    // --------------------------------------------------
-
+    // STEP 6: Return results
     return res.status(200).json({
       success: true,
       count: billingRecords.length,
       billingRecords,
     });
-
   } catch (error) {
-    console.error(
-      "Get Billing Records Error:",
-      error
-    );
+    console.error("Get Billing Records Error:", error);
 
     return res.status(500).json({
       success: false,
@@ -195,22 +148,17 @@ const getBillingRecords = async (req, res) => {
 
 const updateBillingRecord = async (req, res) => {
   try {
-    const {
-      amount,
-      status,
-    } = req.body;
-
+    const { amount, status } = req.body;
     const updateData = {};
 
-    // --------------------------------------------------
-    // Amount
-    // --------------------------------------------------
-
+    // Validate amount
     if (amount !== undefined) {
       const numericAmount = Number(amount);
 
       if (
-        Number.isNaN(numericAmount) ||
+        amount === null ||
+        (typeof amount === "string" && amount.trim() === "") ||
+        !Number.isFinite(numericAmount) ||
         numericAmount < 0
       ) {
         return res.status(400).json({
@@ -222,40 +170,34 @@ const updateBillingRecord = async (req, res) => {
       updateData.amount = numericAmount;
     }
 
-    // --------------------------------------------------
-    // Status
-    // --------------------------------------------------
-
+    // Validate status
     if (status !== undefined) {
-      if (
-        !["Paid", "Unpaid"].includes(status)
-      ) {
+      if (!["Paid", "Unpaid"].includes(status)) {
         return res.status(400).json({
           success: false,
-          message:
-            "Status must be Paid or Unpaid",
+          message: "Status must be Paid or Unpaid",
         });
       }
 
       updateData.status = status;
     }
 
-    // --------------------------------------------------
-    // Update
-    // --------------------------------------------------
+    // Require at least one field to update
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Provide amount or status to update",
+      });
+    }
 
-    const billingRecord =
-      await BillingRecord.findByIdAndUpdate(
-        req.params.id,
-        updateData,
-        {
-          new: true,
-          runValidators: true,
-        }
-      ).populate(
-        "customerId",
-        "name phone email address"
-      );
+    const billingRecord = await BillingRecord.findByIdAndUpdate(
+      req.params.id,
+      { $set: updateData },
+      {
+        new: true,
+        runValidators: true,
+      }
+    ).populate("customerId", "name phone email address");
 
     if (!billingRecord) {
       return res.status(404).json({
@@ -266,21 +208,15 @@ const updateBillingRecord = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message:
-        "Billing record updated successfully",
+      message: "Billing record updated successfully",
       billingRecord,
     });
-
   } catch (error) {
-    console.error(
-      "Update Billing Record Error:",
-      error
-    );
+    console.error("Update Billing Record Error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to update billing record",
+      message: "Failed to update billing record",
       error: error.message,
     });
   }
@@ -300,24 +236,15 @@ const createBillingRecord = async (req, res) => {
       status,
     } = req.body;
 
-    if (
-      !customerId ||
-      !month ||
-      !year
-    ) {
+    if (!customerId || !month || !year) {
       return res.status(400).json({
         success: false,
-        message:
-          "Customer, month and year are required",
+        message: "Customer, month and year are required",
       });
     }
 
-    // --------------------------------------------------
-    // Check customer
-    // --------------------------------------------------
-
-    const customer =
-      await Customer.findById(customerId);
+    // Check customer exists
+    const customer = await Customer.findById(customerId);
 
     if (!customer) {
       return res.status(404).json({
@@ -326,37 +253,38 @@ const createBillingRecord = async (req, res) => {
       });
     }
 
-    // --------------------------------------------------
-    // Check duplicate
-    // --------------------------------------------------
+    // Validate year
+    const numericYear = Number(year);
 
-    const existingRecord =
-      await BillingRecord.findOne({
-        customerId,
-        month,
-        year,
+    if (!Number.isInteger(numericYear)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid year",
       });
+    }
+
+    // Check duplicate
+    const existingRecord = await BillingRecord.findOne({
+      customerId,
+      month,
+      year: numericYear,
+    });
 
     if (existingRecord) {
       return res.status(400).json({
         success: false,
-        message:
-          "Billing record already exists for this month",
+        message: "Billing record already exists for this month",
         billingRecord: existingRecord,
       });
     }
 
-    // --------------------------------------------------
-    // Create
-    // --------------------------------------------------
-
-    const numericAmount =
-      amount !== undefined
-        ? Number(amount)
-        : 0;
+    // Validate amount
+    const numericAmount = amount !== undefined ? Number(amount) : 0;
 
     if (
-      Number.isNaN(numericAmount) ||
+      amount === null ||
+      (typeof amount === "string" && amount.trim() === "") ||
+      !Number.isFinite(numericAmount) ||
       numericAmount < 0
     ) {
       return res.status(400).json({
@@ -365,51 +293,40 @@ const createBillingRecord = async (req, res) => {
       });
     }
 
-    const finalStatus =
-      status || "Unpaid";
+    // Validate status
+    const finalStatus = status || "Unpaid";
 
-    if (
-      !["Paid", "Unpaid"].includes(finalStatus)
-    ) {
+    if (!["Paid", "Unpaid"].includes(finalStatus)) {
       return res.status(400).json({
         success: false,
-        message:
-          "Status must be Paid or Unpaid",
+        message: "Status must be Paid or Unpaid",
       });
     }
 
-    const billingRecord =
-      await BillingRecord.create({
-        customerId,
-        month,
-        year: Number(year),
-        amount: numericAmount,
-        status: finalStatus,
-      });
+    const billingRecord = await BillingRecord.create({
+      customerId,
+      month,
+      year: numericYear,
+      amount: numericAmount,
+      status: finalStatus,
+    });
 
-    const populatedRecord =
-      await billingRecord.populate(
-        "customerId",
-        "name phone email address"
-      );
+    const populatedRecord = await billingRecord.populate(
+      "customerId",
+      "name phone email address"
+    );
 
     return res.status(201).json({
       success: true,
-      message:
-        "Billing record created successfully",
+      message: "Billing record created successfully",
       billingRecord: populatedRecord,
     });
-
   } catch (error) {
-    console.error(
-      "Create Billing Record Error:",
-      error
-    );
+    console.error("Create Billing Record Error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to create billing record",
+      message: "Failed to create billing record",
       error: error.message,
     });
   }
@@ -417,188 +334,131 @@ const createBillingRecord = async (req, res) => {
 
 // ======================================================
 // MONTHLY SUMMARY
+// Search does not affect this summary
 // ======================================================
 
 const getBillingSummary = async (req, res) => {
   try {
-    const {
-      month,
-      year,
-    } = req.query;
+    const { month, year } = req.query;
 
     if (!month || !year) {
       return res.status(400).json({
         success: false,
-        message:
-          "Month and year are required",
+        message: "Month and year are required",
       });
     }
 
     const numericYear = Number(year);
 
-    if (Number.isNaN(numericYear)) {
+    if (!Number.isInteger(numericYear)) {
       return res.status(400).json({
         success: false,
         message: "Invalid year",
       });
     }
 
-    // --------------------------------------------------
-    // Make sure monthly records exist
-    // --------------------------------------------------
+    // Ensure selected month's billing records exist
+    await ensureMonthlyBillingRecords(month, numericYear);
 
-    await ensureMonthlyBillingRecords(
-      month,
-      numericYear
-    );
-
-    // --------------------------------------------------
-    // Calculate summary
-    // --------------------------------------------------
-
-    const result =
-      await BillingRecord.aggregate([
-        {
-          $match: {
-            month,
-            year: numericYear,
+    // Calculate summary for the entire selected month
+    const result = await BillingRecord.aggregate([
+      {
+        $match: {
+          month,
+          year: numericYear,
+        },
+      },
+      {
+        $lookup: {
+          from: "customers",
+          localField: "customerId",
+          foreignField: "_id",
+          as: "customer",
+        },
+      },
+      {
+        $match: {
+          "customer.0": {
+            $exists: true,
           },
         },
+      },
+      {
+        $group: {
+          _id: null,
 
-        // ------------------------------------------------
-        // IMPORTANT:
-        // Verify that customer still exists
-        // ------------------------------------------------
-
-        {
-          $lookup: {
-            from: "customers",
-            localField: "customerId",
-            foreignField: "_id",
-            as: "customer",
+          totalCustomers: {
+            $sum: 1,
           },
-        },
 
-        {
-          $match: {
-            "customer.0": {
-              $exists: true,
+          totalAmount: {
+            $sum: "$amount",
+          },
+
+          paidAmount: {
+            $sum: {
+              $cond: [
+                { $eq: ["$status", "Paid"] },
+                "$amount",
+                0,
+              ],
             },
           },
-        },
 
-        // ------------------------------------------------
-        // Calculate summary
-        // ------------------------------------------------
-
-        {
-          $group: {
-            _id: null,
-
-            totalCustomers: {
-              $sum: 1,
+          unpaidAmount: {
+            $sum: {
+              $cond: [
+                { $eq: ["$status", "Unpaid"] },
+                "$amount",
+                0,
+              ],
             },
+          },
 
-            totalAmount: {
-              $sum: "$amount",
+          paidCustomers: {
+            $sum: {
+              $cond: [
+                { $eq: ["$status", "Paid"] },
+                1,
+                0,
+              ],
             },
+          },
 
-            paidAmount: {
-              $sum: {
-                $cond: [
-                  {
-                    $eq: [
-                      "$status",
-                      "Paid",
-                    ],
-                  },
-                  "$amount",
-                  0,
-                ],
-              },
-            },
-
-            unpaidAmount: {
-              $sum: {
-                $cond: [
-                  {
-                    $eq: [
-                      "$status",
-                      "Unpaid",
-                    ],
-                  },
-                  "$amount",
-                  0,
-                ],
-              },
-            },
-
-            paidCustomers: {
-              $sum: {
-                $cond: [
-                  {
-                    $eq: [
-                      "$status",
-                      "Paid",
-                    ],
-                  },
-                  1,
-                  0,
-                ],
-              },
-            },
-
-            unpaidCustomers: {
-              $sum: {
-                $cond: [
-                  {
-                    $eq: [
-                      "$status",
-                      "Unpaid",
-                    ],
-                  },
-                  1,
-                  0,
-                ],
-              },
+          unpaidCustomers: {
+            $sum: {
+              $cond: [
+                { $eq: ["$status", "Unpaid"] },
+                1,
+                0,
+              ],
             },
           },
         },
-      ]);
+      },
+    ]);
 
-    // --------------------------------------------------
-    // Default summary
-    // --------------------------------------------------
+    const summary = result[0] || {
+      totalCustomers: 0,
+      totalAmount: 0,
+      paidAmount: 0,
+      unpaidAmount: 0,
+      paidCustomers: 0,
+      unpaidCustomers: 0,
+    };
 
-    const summary =
-      result[0] || {
-        totalCustomers: 0,
-        totalAmount: 0,
-        paidAmount: 0,
-        unpaidAmount: 0,
-        paidCustomers: 0,
-        unpaidCustomers: 0,
-      };
-
-    // MongoDB aggregation _id frontend ko
-    // nahi chahiye
     delete summary._id;
 
     return res.status(200).json({
       success: true,
       summary,
     });
-
   } catch (error) {
-    console.error(
-      "Billing Summary Error:",
-      error
-    );
+    console.error("Billing Summary Error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to calculate billing summary",
+      message: "Failed to calculate billing summary",
       error: error.message,
     });
   }
